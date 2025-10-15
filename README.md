@@ -8,12 +8,13 @@ A Python script to upload thousands of images to DigitalOcean Spaces object stor
 
 - 🚀 **Concurrent batch uploading** - Upload with multiple threads (10-20x faster for thousands of images!)
 - 📦 Batch upload thousands of images efficiently
+- 🔢 **Automatic sequential renaming** - Files renamed to 1.png, 2.png, etc. per subdirectory
 - 🖼️ Automatic thumbnail generation (200x300px, 2:3 ratio, center-cropped to fill completely)
 - 📁 Organized storage with separate folders for originals and thumbnails
 - ⏭️ Skip already uploaded files (resume capability)
 - 🔄 Automatic retry logic for failed uploads
 - 📊 Progress tracking with visual progress bar
-- 📝 Detailed logging to file and console
+- 📝 Detailed logging to file and console (with rename mapping)
 - 🎨 Supports multiple image formats (JPG, PNG, WebP, GIF, BMP, TIFF)
 - ⚙️ Configurable folder structure (default: `/avatar/original/` and `/avatar/thumbnail/`)
 
@@ -85,13 +86,15 @@ python upload_images.py /path/to/your/images
 **Upload with 10 concurrent workers (10-20x faster!):**
 
 ```bash
-python upload_images.py /path/to/your/images --workers 10
+python upload_images.py ./images --workers 10
 ```
+
+This will upload from `images/female/` and `images/male/` to `avatar/female/original/`, `avatar/female/thumbnail/`, `avatar/male/original/`, `avatar/male/thumbnail/`
 
 **Upload with 20 workers for maximum speed:**
 
 ```bash
-python upload_images.py /path/to/your/images --workers 20 --batch-size 200
+python upload_images.py ./images --workers 20 --batch-size 200
 ```
 
 ### Advanced Options
@@ -139,11 +142,13 @@ python upload_images.py --help
 
 1. **Scanning**: The script recursively scans the specified directory for supported image files
 2. **Processing**: For each image:
-   - Uploads the original to `/avatar/original/` folder in your bucket (customizable)
+   - Preserves subdirectory structure (e.g., `female`, `male`)
+   - **Renames files to sequential numbers** (1.png, 2.png, 3.png, etc.) per subdirectory
+   - Uploads the original to `/avatar/{subdirectory}/original/` folder in your bucket
    - Creates a 200x300px thumbnail (scaled and center-cropped to fill completely, no empty spaces)
-   - Uploads the thumbnail to `/avatar/thumbnail/` folder in your bucket (customizable)
+   - Uploads the thumbnail to `/avatar/{subdirectory}/thumbnail/` folder in your bucket
 3. **Concurrency**: With `--workers` option, processes multiple images simultaneously
-4. **Progress**: Shows a progress bar and logs all operations
+4. **Progress**: Shows a progress bar and logs all operations with rename mapping
 5. **Resume**: By default, skips files that already exist in Spaces (can be overridden)
 6. **Summary**: Displays statistics at the end
 
@@ -151,33 +156,66 @@ python upload_images.py --help
 
 After uploading with default settings, your bucket will have this structure:
 
+**If your source has subdirectories (e.g., `images/female/`, `images/male/`):**
+
+Files are automatically renamed to sequential numbers (1.png, 2.png, etc.) for each gender:
+
+```
+your-bucket/
+└── avatar/
+    ├── female/
+    │   ├── original/
+    │   │   ├── 1.png
+    │   │   ├── 2.png
+    │   │   ├── 3.png
+    │   │   └── ...
+    │   └── thumbnail/
+    │       ├── 1.png    (200x300px)
+    │       ├── 2.png    (200x300px)
+    │       ├── 3.png    (200x300px)
+    │       └── ...
+    └── male/
+        ├── original/
+        │   ├── 1.png
+        │   ├── 2.png
+        │   └── ...
+        └── thumbnail/
+            ├── 1.png    (200x300px)
+            ├── 2.png    (200x300px)
+            └── ...
+```
+
+**Original filename -> Renamed:**
+- `0001_female_Sicilian_Yakuza_Prohibition.png` -> `1.png`
+- `0002_female_Japanese_Cartel_Safecracker.png` -> `2.png`
+- etc.
+
+**If your source has no subdirectories:**
+
 ```
 your-bucket/
 └── avatar/
     ├── original/
-    │   ├── image1.jpg
-    │   ├── image2.png
-    │   └── subfolder/
-    │       └── image3.jpg
+    │   ├── 1.jpg
+    │   ├── 2.jpg
+    │   └── ...
     └── thumbnail/
-        ├── image1.jpg
-        ├── image2.jpg
-        └── subfolder/
-            └── image3.jpg
+        ├── 1.jpg
+        ├── 2.jpg
+        └── ...
 ```
 
 **Customizable Folder Structure:**
 
-You can change the folder prefix using `--prefix`. For example, `--prefix profile` will create:
+You can change the folder prefix using `--prefix`. For example, `--prefix profile` will create `/profile/female/original/`, `/profile/female/thumbnail/`, etc.
 
-```
-your-bucket/
-└── profile/
-    ├── original/
-    └── thumbnail/
-```
-
-The script preserves the relative directory structure from your source folder.
+**Important Notes:**
+- Files are **automatically renamed** to sequential numbers (1, 2, 3...) during upload
+- The original file extension is preserved (.png, .jpg, etc.)
+- Numbering is **separate for each subdirectory** (female starts at 1, male starts at 1)
+- Files are numbered in **alphabetical order** of the original filenames
+- The script intelligently preserves subdirectories (like `female`, `male`) and organizes them with `original` and `thumbnail` subfolders
+- Check the log file to see the complete mapping of original names to new numbers
 
 ## Thumbnail Details
 

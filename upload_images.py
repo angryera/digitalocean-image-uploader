@@ -77,6 +77,10 @@ class ImageUploader:
         }
         self.stats_lock = threading.Lock()
         
+        # Counter for sequential numbering per subdirectory
+        self.subdirectory_counters = {}
+        self.counter_lock = threading.Lock()
+        
         logger.info(f"Initialized uploader for bucket: {self.bucket_name}")
         logger.info(f"Folder prefix: {self.folder_prefix}")
     
@@ -102,6 +106,23 @@ class ImageUploader:
         
         logger.info(f"Found {len(image_files)} image files in {directory}")
         return sorted(image_files)
+    
+    def get_next_number(self, subdirectory: str) -> int:
+        """
+        Get the next sequential number for a subdirectory.
+        Thread-safe counter increment.
+        
+        Args:
+            subdirectory: The subdirectory name (e.g., 'female', 'male')
+            
+        Returns:
+            Next sequential number for this subdirectory
+        """
+        with self.counter_lock:
+            if subdirectory not in self.subdirectory_counters:
+                self.subdirectory_counters[subdirectory] = 0
+            self.subdirectory_counters[subdirectory] += 1
+            return self.subdirectory_counters[subdirectory]
     
     def create_thumbnail(self, image_path: Path) -> Optional[io.BytesIO]:
         """
@@ -244,6 +265,7 @@ class ImageUploader:
                                 skip_existing: bool = True) -> Tuple[bool, bool]:
         """
         Process an image and upload both original and thumbnail versions.
+        Files are renamed to sequential numbers (1.png, 2.png, etc.) per subdirectory.
         
         Args:
             image_path: Path to the image file
@@ -256,9 +278,38 @@ class ImageUploader:
         # Calculate relative path from base directory
         relative_path = image_path.relative_to(base_dir)
         
-        # Define keys for original and thumbnail with folder prefix
-        original_key = f"{self.folder_prefix}/original/{relative_path.as_posix()}"
-        thumbnail_key = f"{self.folder_prefix}/thumbnail/{relative_path.as_posix()}"
+        # Extract the path components
+        path_parts = relative_path.parts
+        
+        # Get the file extension (keeping original format)
+        file_extension = image_path.suffix.lower()  # e.g., '.png', '.jpg'
+        
+        # If there's a subdirectory (e.g., 'female', 'male'), preserve it in the structure
+        # and generate sequential numbering per subdirectory
+        if len(path_parts) > 1:
+            # Has subdirectory: e.g., female/image.png
+            subdirectory = path_parts[0]  # e.g., 'female' or 'male'
+            
+            # Get next sequential number for this subdirectory
+            file_number = self.get_next_number(subdirectory)
+            new_filename = f"{file_number}{file_extension}"
+            
+            # Handle nested subdirectories if any (e.g., female/subfolder/image.png)
+            if len(path_parts) > 2:
+                # Preserve nested structure: female/subfolder/1.png
+                nested_path = '/'.join(path_parts[1:-1])  # Get middle parts (subfolder)
+                original_key = f"{self.folder_prefix}/{subdirectory}/original/{nested_path}/{new_filename}"
+                thumbnail_key = f"{self.folder_prefix}/{subdirectory}/thumbnail/{nested_path}/{new_filename}"
+            else:
+                # Simple structure: female/1.png
+                original_key = f"{self.folder_prefix}/{subdirectory}/original/{new_filename}"
+                thumbnail_key = f"{self.folder_prefix}/{subdirectory}/thumbnail/{new_filename}"
+        else:
+            # No subdirectory: just filename - still use sequential numbering
+            file_number = self.get_next_number('root')
+            new_filename = f"{file_number}{file_extension}"
+            original_key = f"{self.folder_prefix}/original/{new_filename}"
+            thumbnail_key = f"{self.folder_prefix}/thumbnail/{new_filename}"
         
         original_success = False
         thumbnail_success = False
@@ -280,6 +331,9 @@ class ImageUploader:
         # Get content type
         content_type = self.get_content_type(image_path)
         
+        # Log the rename operation
+        logger.info(f"Processing: {image_path.name} -> {new_filename}")
+        
         # Upload original
         if not skip_existing or not original_exists:
             original_success = self.upload_file(image_path, original_key, content_type)
@@ -300,7 +354,7 @@ class ImageUploader:
                 if thumbnail_success:
                     logger.debug(f"Uploaded thumbnail: {thumbnail_key}")
             else:
-                logger.error(f"Failed to create thumbnail for {relative_path}")
+                logger.error(f"Failed to create thumbnail for {image_path.name} (-> {new_filename})")
         else:
             thumbnail_success = True
         
@@ -433,19 +487,21 @@ def main():
         epilog="""
 Examples:
   # Sequential upload (safe, slower)
-  python upload_images.py /path/to/images
+  python upload_images.py ./images
   
   # Batch upload with 10 concurrent workers (much faster for thousands of images)
-  python upload_images.py /path/to/images --workers 10
+  # Uploads images/female/* to avatar/female/original/ and avatar/female/thumbnail/
+  # Uploads images/male/* to avatar/male/original/ and avatar/male/thumbnail/
+  python upload_images.py ./images --workers 10
   
   # Upload to custom folder prefix
-  python upload_images.py /path/to/images --prefix profile
+  python upload_images.py ./images --prefix profile
   
   # Force re-upload all files
-  python upload_images.py /path/to/images --no-skip-existing
+  python upload_images.py ./images --no-skip-existing
   
   # Combine options for maximum speed
-  python upload_images.py /path/to/images --workers 20 --batch-size 200
+  python upload_images.py ./images --workers 20 --batch-size 200
         """
     )
     
@@ -475,7 +531,7 @@ Examples:
         type=str,
         default='avatar',
         help='Folder prefix in the bucket (default: avatar). '
-             'Files will be uploaded to /<prefix>/original/ and /<prefix>/thumbnail/'
+             'Files will be uploaded to /<prefix>/<subdirectory>/original/ and /<prefix>/<subdirectory>/thumbnail/'
     )
     
     parser.add_argument(
